@@ -1,0 +1,174 @@
+#include "stm32f10x.h"
+
+//rejestr 12-bitowy prawo-zorientowany
+#define DAC_DHR12RD_Address 0x40007420
+
+void RCC_Config(void);
+void GPIO_Config(void);
+void NVIC_Config(void);
+void TIM_Config(void);
+void DMA_Config(void);
+void DAC_Config(void);
+
+const uint16_t Sine12bit[32] = {
+  2047, 2447, 2831, 3185, 3498, 3750, 3939, 4056, 4095, 4056,
+  3939, 3750, 3495, 3185, 2831, 2447, 2047, 1647, 1263, 909, 
+  599, 344, 155, 38, 0, 38, 155, 344, 599, 909, 1263, 1647};
+
+int main(void)
+{
+	RCC_Config();
+	GPIO_Config();
+	NVIC_Config();
+	TIM_Config();
+	DMA_Config();
+	DAC_Config();
+	
+        GPIO_WriteBit(GPIOB, GPIO_Pin_0 | GPIO_Pin_1, Bit_SET);
+	GPIO_WriteBit(GPIOC, GPIO_Pin_4 | GPIO_Pin_5, Bit_SET);
+	
+	while (1) ;
+}
+
+
+//konfiguracja sygnalow taktujacych
+void RCC_Config(void){
+
+  ErrorStatus HSEStartUpStatus;                          
+  RCC_DeInit(); 
+  RCC_HSEConfig(RCC_HSE_ON); 	
+  HSEStartUpStatus = RCC_WaitForHSEStartUp();  
+	
+  if(HSEStartUpStatus == SUCCESS){
+	  FLASH_PrefetchBufferCmd(FLASH_PrefetchBuffer_Enable);
+    FLASH_SetLatency(FLASH_Latency_2);                    
+           	
+    RCC_HCLKConfig(RCC_SYSCLK_Div1); 	
+    RCC_PCLK2Config(RCC_HCLK_Div1);   	
+    RCC_PCLK1Config(RCC_HCLK_Div2);  
+
+		RCC_PREDIV2Config(RCC_PREDIV2_Div5 );																				
+	  RCC_PLL2Config(RCC_PLL2Mul_8);
+	  RCC_PLL2Cmd(ENABLE);
+	  while(RCC_GetFlagStatus(RCC_FLAG_PLL2RDY) == RESET) {} 											
+
+    RCC_PREDIV1Config(RCC_PREDIV1_Source_PLL2,RCC_PREDIV1_Div5);								
+	  RCC_PLLConfig(RCC_PLLSource_PREDIV1, RCC_PLLMul_9);                                      
+    
+		RCC_PLLCmd(ENABLE);  
+    while(RCC_GetFlagStatus(RCC_FLAG_PLLRDY) == RESET); 
+
+    RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);
+    while(RCC_GetSYSCLKSource() != 0x08);              
+		
+	//taktowania blokow
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
+           RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE);
+	RCC _APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_AHBPeriph_DMA2, ENABLE);
+	RCC_APB2PeriphClockCmd(RCC_APB1Periph_TIM6, ENABLE);  //36MHz
+	RCC_APB2PeriphClockCmd(RCC_APB1Periph_DAC, ENABLE);   //36MHz
+
+  } else {
+  }
+}
+
+//konfiguracja portow GPIO
+void GPIO_Config(void){
+  GPIO_InitTypeDef  GPIO_InitStructure;
+
+	//diody LED
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+  GPIO_Init(GPIOB, &GPIO_InitStructure);
+	
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4 | GPIO_Pin_5;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_2MHz;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
+  GPIO_Init(GPIOC, &GPIO_InitStructure);
+	
+	
+	//DAC_OUT1
+	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
+  GPIO_Init(GPIOA, &GPIO_InitStructure);
+}
+
+//konfiguracja obslugi przerwan
+void NVIC_Config(void){
+	
+#ifdef  VECT_TAB_RAM
+  // Jezeli tablica wektorow w RAM, to ustaw jej adres na 0x20000000
+  NVIC_SetVectorTable(NVIC_VectTab_RAM, 0x0);
+#else  // VECT_TAB_FLASH
+  // W przeciwnym wypadku ustaw na 0x08000000
+  NVIC_SetVectorTable(NVIC_VectTab_FLASH, 0x0);
+#endif
+	
+}
+
+//konfiguracja triggera dla generatora
+void TIM_Config(void){
+	
+  TIM_TimeBaseInitTypeDef TIM_TimeBaseStructure;
+	
+  TIM_TimeBaseStructInit(&TIM_TimeBaseStructure); 
+
+  
+  TIM_TimeBaseStructure.TIM_Prescaler = 3600-1; //10kHz
+  TIM_TimeBaseStructure.TIM_Period = 100;       //->100kHz   
+         
+  TIM_TimeBaseStructure.TIM_ClockDivision = 0x0;    
+  TIM_TimeBaseStructure.TIM_CounterMode = TIM_CounterMode_Up;  
+  TIM_TimeBaseInit(TIM6, &TIM_TimeBaseStructure);
+
+
+ TIM_SelectOutputTrigger(TIM6, TIM_TRGOSource_Update);
+	
+ TIM_Cmd(TIM6, ENABLE);
+}
+
+//konfiguracja mechanizmu DMA
+void DMA_Config(void){
+	
+  DMA_InitTypeDef DMA_InitStructure;
+	
+  DMA_DeInit(DMA2_Channel3); //sprawdzone w Reference Manual na str. 272
+
+  DMA_InitStructure.DMA_PeripheralBaseAddr = DAC_DHR12RD_Address;
+  DMA_InitStructure.DMA_MemoryBaseAddr = (uint32_t)&Sine12bit;
+  DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralDST;
+  DMA_InitStructure.DMA_BufferSize = 32;
+  DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
+  DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Enable;
+  DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Word;
+  DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_Word;
+  DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
+  DMA_InitStructure.DMA_Priority = DMA_Priority_High;
+  DMA_InitStructure.DMA_M2M = DMA_M2M_Disable;
+	
+
+  DMA_Init(DMA2_Channel3, &DMA_InitStructure);
+  DMA_Cmd(DMA2_Channel3, ENABLE);
+}
+
+//konfiguracja przetwornika C/A
+void DAC_Config(void){
+
+	DAC_InitTypeDef DAC_InitStructure;
+	
+	DAC_DeInit();
+	
+	DAC_InitStructure.DAC_Trigger = DAC_Trigger_T6_TRGO;
+           DAC_InitStructure.DAC_WaveGeneration = DAC_WaveGeneration_None;
+           DAC_InitStructure.DAC_OutputBuffer = DAC_OutputBuffer_Enable;
+  
+	DAC_Init(DAC_Channel_1, &DAC_InitStructure);
+	
+	DAC_Cmd(DAC_Channel_1, ENABLE);
+	DAC_DMACmd(DAC_Channel_1, ENABLE);
+}	
+
