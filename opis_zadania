@@ -1,0 +1,6 @@
+- Zadaniem projektu jest zaprogramowanie pytki STM32F407 by ta pelnila role generatora sygnalow testowych.
+- na wejcie analog/cyfra podawany bedzie sygnal sygnal z generatora jako strobujacy: jako zwykle I/O do strobowania
+- w zależnoći od impulsu generuje okresy sygnalow sinusoidalnych, prostokatnych, trojkatnych badz innej fali
+- syganal wyrzucamy na cyfra/analog w zakresie (0-3)V
+- wyjscie ukladu bedzie na sygnal wyjsciowy oraz mase
+- interfers CMSIS
